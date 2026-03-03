@@ -18,7 +18,7 @@ import logging
 mainlogger = logging.getLogger('mainlogger')
 
 from functools import partial
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from tqdm import tqdm
 from einops import rearrange, repeat, reduce
 from torch.optim.lr_scheduler import LambdaLR, CosineAnnealingLR
@@ -1068,19 +1068,22 @@ class LatentDiffusion(DDPM):
         else:
             reshape_back = False
 
-        ## Consume more GPU memory but faster
-        if not self.perframe_ae:
-            encoder_posterior = self.first_stage_model.encode(x)
-            results = self.get_first_stage_encoding(encoder_posterior).detach()
-        else:  ## Consume less GPU memory but slower
-            results = []
-            for index in range(x.shape[0]):
-                frame_batch = self.first_stage_model.encode(x[index:index +
-                                                              1, :, :, :])
-                frame_result = self.get_first_stage_encoding(
-                    frame_batch).detach()
-                results.append(frame_result)
-            results = torch.cat(results, dim=0)
+        amp_ctx = torch.autocast(device_type='cuda', dtype=torch.float16) if x.is_cuda else nullcontext()
+        with amp_ctx:
+            ## Consume more GPU memory but faster
+            if not self.perframe_ae:
+                encoder_posterior = self.first_stage_model.encode(x)
+                results = self.get_first_stage_encoding(
+                    encoder_posterior).detach()
+            else:  ## Consume less GPU memory but slower
+                results = []
+                for index in range(x.shape[0]):
+                    frame_batch = self.first_stage_model.encode(
+                        x[index:index + 1, :, :, :])
+                    frame_result = self.get_first_stage_encoding(
+                        frame_batch).detach()
+                    results.append(frame_result)
+                results = torch.cat(results, dim=0)
 
         if reshape_back:
             results = rearrange(results, '(b t) c h w -> b c t h w', b=b, t=t)
@@ -1104,16 +1107,20 @@ class LatentDiffusion(DDPM):
         else:
             reshape_back = False
 
-        if not self.perframe_ae:
-            z = 1. / self.scale_factor * z
-            results = self.first_stage_model.decode(z, **kwargs)
-        else:
-            results = []
-            for index in range(z.shape[0]):
-                frame_z = 1. / self.scale_factor * z[index:index + 1, :, :, :]
-                frame_result = self.first_stage_model.decode(frame_z, **kwargs)
-                results.append(frame_result)
-            results = torch.cat(results, dim=0)
+        amp_ctx = torch.autocast(device_type='cuda', dtype=torch.float16) if z.is_cuda else nullcontext()
+        with amp_ctx:
+            if not self.perframe_ae:
+                z = 1. / self.scale_factor * z
+                results = self.first_stage_model.decode(z, **kwargs)
+            else:
+                results = []
+                for index in range(z.shape[0]):
+                    frame_z = 1. / self.scale_factor * z[index:index + 1, :, :,
+                                                         :]
+                    frame_result = self.first_stage_model.decode(
+                        frame_z, **kwargs)
+                    results.append(frame_result)
+                results = torch.cat(results, dim=0)
 
         if reshape_back:
             results = rearrange(results, '(b t) c h w -> b c t h w', b=b, t=t)

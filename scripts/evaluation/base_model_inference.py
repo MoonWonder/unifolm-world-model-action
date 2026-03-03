@@ -249,10 +249,13 @@ def get_latent_z(model: torch.nn.Module, videos: torch.Tensor) -> torch.Tensor:
     return z
 
 
+@torch.inference_mode()
+
 def image_guided_synthesis(model: torch.nn.Module,
                            prompts: list[str],
                            videos: torch.Tensor,
                            noise_shape: list[int],
+                           ddim_sampler: DDIMSampler | None = None,
                            ddim_steps: int = 50,
                            ddim_eta: float = 1.0,
                            unconditional_guidance_scale: float = 1.0,
@@ -282,7 +285,8 @@ def image_guided_synthesis(model: torch.nn.Module,
         torch.Tensor: Synthesized videos of shape [B, 1, C, T, H, W].
     """
 
-    ddim_sampler = DDIMSampler(model)
+    if ddim_sampler is None:
+        ddim_sampler = DDIMSampler(model)
     batch_size = noise_shape[0]
     fs = torch.tensor([fs] * batch_size, dtype=torch.long, device=model.device)
 
@@ -372,6 +376,7 @@ def run_inference(args: argparse.Namespace, gpu_num: int, gpu_no: int) -> None:
     n_frames = args.video_length
     print(f'>>> Generate {n_frames} frames under each generation ...')
     noise_shape = [args.bs, channels, n_frames, h, w]
+    ddim_sampler = DDIMSampler(model)
 
     fakedir = os.path.join(args.savedir, "samples")
     os.makedirs(fakedir, exist_ok=True)
@@ -418,7 +423,7 @@ def run_inference(args: argparse.Namespace, gpu_num: int, gpu_no: int) -> None:
             )
             for _ in range(num_gen[0]):
                 batch_samples = image_guided_synthesis(
-                    model, prompts, videos, noise_shape, args.ddim_steps,
+                    model, prompts, videos, noise_shape, ddim_sampler, args.ddim_steps,
                     args.ddim_eta, args.unconditional_guidance_scale,
                     fps[0] // fs[0], args.text_input, args.timestep_spacing,
                     args.guidance_rescale)

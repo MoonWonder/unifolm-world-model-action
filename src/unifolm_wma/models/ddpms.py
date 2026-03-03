@@ -1108,19 +1108,20 @@ class LatentDiffusion(DDPM):
         else:
             reshape_back = False
 
-        z = 1. / self.scale_factor * z
         chunk_size = self.en_and_decode_n_samples_a_time
         # Fast path: decode all frames together.
         if (not self.perframe_ae) and (chunk_size is None or chunk_size >=
                                        z.shape[0]):
-            results = self.first_stage_model.decode(z, **kwargs)
+            scaled_z = z / self.scale_factor
+            results = self.first_stage_model.decode(scaled_z, **kwargs)
         else:
             # Memory-aware path: decode by chunk (chunk_size=1 reproduces old per-frame behavior).
             chunk_size = max(1, chunk_size or 1)
             results = []
             for start in range(0, z.shape[0], chunk_size):
                 end = min(start + chunk_size, z.shape[0])
-                frame_result = self.first_stage_model.decode(z[start:end],
+                scaled_chunk = z[start:end] / self.scale_factor
+                frame_result = self.first_stage_model.decode(scaled_chunk,
                                                              **kwargs)
                 results.append(frame_result)
             results = torch.cat(results, dim=0)

@@ -1073,10 +1073,11 @@ class LatentDiffusion(DDPM):
             encoder_posterior = self.first_stage_model.encode(x)
             results = self.get_first_stage_encoding(encoder_posterior).detach()
         else:  ## Consume less GPU memory but slower
+            chunk_size = self.en_and_decode_n_samples_a_time or 1
             results = []
-            for index in range(x.shape[0]):
-                frame_batch = self.first_stage_model.encode(x[index:index +
-                                                              1, :, :, :])
+            for index in range(0, x.shape[0], chunk_size):
+                frame_batch = self.first_stage_model.encode(
+                    x[index:index + chunk_size, :, :, :])
                 frame_result = self.get_first_stage_encoding(
                     frame_batch).detach()
                 results.append(frame_result)
@@ -1108,9 +1109,11 @@ class LatentDiffusion(DDPM):
             z = 1. / self.scale_factor * z
             results = self.first_stage_model.decode(z, **kwargs)
         else:
+            chunk_size = self.en_and_decode_n_samples_a_time or 1
             results = []
-            for index in range(z.shape[0]):
-                frame_z = 1. / self.scale_factor * z[index:index + 1, :, :, :]
+            for index in range(0, z.shape[0], chunk_size):
+                frame_z = 1. / self.scale_factor * z[index:index + chunk_size,
+                                                     :, :, :]
                 frame_result = self.first_stage_model.decode(frame_z, **kwargs)
                 results.append(frame_result)
             results = torch.cat(results, dim=0)

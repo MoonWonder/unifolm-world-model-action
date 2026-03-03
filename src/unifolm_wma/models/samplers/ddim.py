@@ -16,6 +16,7 @@ class DDIMSampler(object):
         self.ddpm_num_timesteps = model.num_timesteps
         self.schedule = schedule
         self.counter = 0
+        self._schedule_cache_key = None
 
     def register_buffer(self, name, attr):
         if type(attr) == torch.Tensor:
@@ -28,6 +29,11 @@ class DDIMSampler(object):
                       ddim_discretize="uniform",
                       ddim_eta=0.,
                       verbose=True):
+        cache_key = (ddim_num_steps, ddim_discretize, float(ddim_eta),
+                     self.model.device)
+        if self._schedule_cache_key == cache_key:
+            return
+
         self.ddim_timesteps = make_ddim_timesteps(
             ddim_discr_method=ddim_discretize,
             num_ddim_timesteps=ddim_num_steps,
@@ -77,6 +83,26 @@ class DDIMSampler(object):
             (1 - self.alphas_cumprod / self.alphas_cumprod_prev))
         self.register_buffer('ddim_sigmas_for_original_num_steps',
                              sigmas_for_original_sampling_steps)
+        self._schedule_cache_key = cache_key
+
+    @staticmethod
+    def _concat_conditioning(cond, uncond):
+        if isinstance(cond, torch.Tensor):
+            return torch.cat([uncond, cond], dim=0)
+        if isinstance(cond, dict):
+            out = {}
+            for key, cond_value in cond.items():
+                uncond_value = uncond[key]
+                if isinstance(cond_value, list):
+                    out[key] = [
+                        torch.cat([uv, cv], dim=0)
+                        for uv, cv in zip(uncond_value, cond_value)
+                    ]
+                else:
+                    out[key] = torch.cat([uncond_value, cond_value], dim=0)
+            return out
+        raise NotImplementedError(
+            f"Unsupported conditioning type: {type(cond)}")
 
     @torch.no_grad()
     def sample(
@@ -336,11 +362,18 @@ class DDIMSampler(object):
         else:
             # do_classifier_free_guidance
             if isinstance(c, torch.Tensor) or isinstance(c, dict):
-                e_t_cond, e_t_cond_action, e_t_cond_state = self.model.apply_model(
-                    x, x_action, x_state, t, c, **kwargs)
-                e_t_uncond, e_t_uncond_action, e_t_uncond_state = self.model.apply_model(
-                    x, x_action, x_state, t, unconditional_conditioning,
-                    **kwargs)
+                x_in = torch.cat([x, x], dim=0)
+                x_action_in = torch.cat([x_action, x_action], dim=0)
+                x_state_in = torch.cat([x_state, x_state], dim=0)
+                t_in = torch.cat([t, t], dim=0)
+                c_in = self._concat_conditioning(c, unconditional_conditioning)
+                e_t_all, e_t_all_action, e_t_all_state = self.model.apply_model(
+                    x_in, x_action_in, x_state_in, t_in, c_in, **kwargs)
+                e_t_uncond, e_t_cond = torch.chunk(e_t_all, 2, dim=0)
+                e_t_uncond_action, e_t_cond_action = torch.chunk(
+                    e_t_all_action, 2, dim=0)
+                e_t_uncond_state, e_t_cond_state = torch.chunk(
+                    e_t_all_state, 2, dim=0)
             else:
                 raise NotImplementedError
             model_output = e_t_uncond + unconditional_guidance_scale * (

@@ -312,11 +312,14 @@ def preprocess_observation(
     return return_observations
 
 
+@torch.inference_mode()
+
 def image_guided_synthesis_sim_mode(
         model: torch.nn.Module,
         prompts: list[str],
         observation: dict,
         noise_shape: tuple[int, int, int, int, int],
+        ddim_sampler: DDIMSampler | None = None,
         action_cond_step: int = 16,
         n_samples: int = 1,
         ddim_steps: int = 50,
@@ -358,7 +361,8 @@ def image_guided_synthesis_sim_mode(
         states (torch.Tensor): Predicted state sequences [B, T, D] from diffusion decoding.
     """
     b, _, t, _, _ = noise_shape
-    ddim_sampler = DDIMSampler(model)
+    if ddim_sampler is None:
+        ddim_sampler = DDIMSampler(model)
     batch_size = noise_shape[0]
 
     fs = torch.tensor([fs] * batch_size, dtype=torch.long, device=model.device)
@@ -485,6 +489,7 @@ def run_inference(args: argparse.Namespace, gpu_num: int, gpu_no: int) -> None:
     n_frames = args.video_length
     print(f'>>> Generate {n_frames} frames under each generation ...')
     noise_shape = [args.bs, channels, n_frames, h, w]
+    ddim_sampler = DDIMSampler(model)
 
     # Start inference
     for idx in range(0, len(df)):
@@ -579,6 +584,7 @@ def run_inference(args: argparse.Namespace, gpu_num: int, gpu_no: int) -> None:
                     sample['instruction'],
                     observation,
                     noise_shape,
+                    ddim_sampler=ddim_sampler,
                     action_cond_step=args.exe_steps,
                     ddim_steps=args.ddim_steps,
                     ddim_eta=args.ddim_eta,
@@ -620,6 +626,7 @@ def run_inference(args: argparse.Namespace, gpu_num: int, gpu_no: int) -> None:
                     "",
                     observation,
                     noise_shape,
+                    ddim_sampler=ddim_sampler,
                     action_cond_step=args.exe_steps,
                     ddim_steps=args.ddim_steps,
                     ddim_eta=args.ddim_eta,

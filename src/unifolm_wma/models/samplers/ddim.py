@@ -302,6 +302,40 @@ class DDIMSampler(object):
         return img, action, state, intermediates
 
     @torch.no_grad()
+    def _cat_conditioning(self, cond, uncond):
+        """Concatenate conditional/unconditional inputs along batch dim for single-pass CFG."""
+        if cond is None or uncond is None:
+            return None
+        if isinstance(cond, torch.Tensor):
+            if not isinstance(uncond, torch.Tensor):
+                return None
+            return torch.cat([uncond, cond], dim=0)
+        if isinstance(cond, dict) and isinstance(uncond, dict):
+            merged = {}
+            for key, c_val in cond.items():
+                u_val = uncond.get(key, None)
+                if isinstance(c_val, list):
+                    if not isinstance(u_val, list) or len(u_val) != len(c_val):
+                        return None
+                    out = []
+                    for u_item, c_item in zip(u_val, c_val):
+                        if isinstance(c_item, torch.Tensor):
+                            if not isinstance(u_item, torch.Tensor):
+                                return None
+                            out.append(torch.cat([u_item, c_item], dim=0))
+                        else:
+                            out.append(c_item)
+                    merged[key] = out
+                elif isinstance(c_val, torch.Tensor):
+                    if not isinstance(u_val, torch.Tensor):
+                        return None
+                    merged[key] = torch.cat([u_val, c_val], dim=0)
+                else:
+                    merged[key] = c_val
+            return merged
+        return None
+
+    @torch.no_grad()
     def p_sample_ddim(self,
                       x,
                       x_action,
@@ -336,11 +370,24 @@ class DDIMSampler(object):
         else:
             # do_classifier_free_guidance
             if isinstance(c, torch.Tensor) or isinstance(c, dict):
-                e_t_cond, e_t_cond_action, e_t_cond_state = self.model.apply_model(
-                    x, x_action, x_state, t, c, **kwargs)
-                e_t_uncond, e_t_uncond_action, e_t_uncond_state = self.model.apply_model(
-                    x, x_action, x_state, t, unconditional_conditioning,
-                    **kwargs)
+                cat_c = self._cat_conditioning(c, unconditional_conditioning)
+                if cat_c is not None:
+                    x_in = torch.cat([x, x], dim=0)
+                    x_action_in = torch.cat([x_action, x_action], dim=0)
+                    x_state_in = torch.cat([x_state, x_state], dim=0)
+                    t_in = torch.cat([t, t], dim=0)
+                    model_output_all, action_output_all, state_output_all = self.model.apply_model(
+                        x_in, x_action_in, x_state_in, t_in, cat_c, **kwargs)
+                    e_t_uncond, e_t_cond = model_output_all.chunk(2)
+                    e_t_uncond_action, e_t_cond_action = action_output_all.chunk(
+                        2)
+                    e_t_uncond_state, e_t_cond_state = state_output_all.chunk(2)
+                else:
+                    e_t_cond, e_t_cond_action, e_t_cond_state = self.model.apply_model(
+                        x, x_action, x_state, t, c, **kwargs)
+                    e_t_uncond, e_t_uncond_action, e_t_uncond_state = self.model.apply_model(
+                        x, x_action, x_state, t, unconditional_conditioning,
+                        **kwargs)
             else:
                 raise NotImplementedError
             model_output = e_t_uncond + unconditional_guidance_scale * (

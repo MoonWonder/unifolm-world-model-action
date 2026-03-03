@@ -1068,15 +1068,19 @@ class LatentDiffusion(DDPM):
         else:
             reshape_back = False
 
-        ## Consume more GPU memory but faster
-        if not self.perframe_ae:
+        chunk_size = self.en_and_decode_n_samples_a_time
+        # Fast path: process all frames together.
+        if (not self.perframe_ae) and (chunk_size is None or chunk_size >=
+                                       x.shape[0]):
             encoder_posterior = self.first_stage_model.encode(x)
             results = self.get_first_stage_encoding(encoder_posterior).detach()
-        else:  ## Consume less GPU memory but slower
+        else:
+            # Memory-aware path: process by chunk (chunk_size=1 reproduces old per-frame behavior).
+            chunk_size = max(1, chunk_size or 1)
             results = []
-            for index in range(x.shape[0]):
-                frame_batch = self.first_stage_model.encode(x[index:index +
-                                                              1, :, :, :])
+            for start in range(0, x.shape[0], chunk_size):
+                end = min(start + chunk_size, x.shape[0])
+                frame_batch = self.first_stage_model.encode(x[start:end])
                 frame_result = self.get_first_stage_encoding(
                     frame_batch).detach()
                 results.append(frame_result)
@@ -1104,14 +1108,20 @@ class LatentDiffusion(DDPM):
         else:
             reshape_back = False
 
-        if not self.perframe_ae:
-            z = 1. / self.scale_factor * z
+        z = 1. / self.scale_factor * z
+        chunk_size = self.en_and_decode_n_samples_a_time
+        # Fast path: decode all frames together.
+        if (not self.perframe_ae) and (chunk_size is None or chunk_size >=
+                                       z.shape[0]):
             results = self.first_stage_model.decode(z, **kwargs)
         else:
+            # Memory-aware path: decode by chunk (chunk_size=1 reproduces old per-frame behavior).
+            chunk_size = max(1, chunk_size or 1)
             results = []
-            for index in range(z.shape[0]):
-                frame_z = 1. / self.scale_factor * z[index:index + 1, :, :, :]
-                frame_result = self.first_stage_model.decode(frame_z, **kwargs)
+            for start in range(0, z.shape[0], chunk_size):
+                end = min(start + chunk_size, z.shape[0])
+                frame_result = self.first_stage_model.decode(z[start:end],
+                                                             **kwargs)
                 results.append(frame_result)
             results = torch.cat(results, dim=0)
 

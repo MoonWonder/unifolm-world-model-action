@@ -18,6 +18,13 @@ from unifolm_wma.modules.attention import SpatialTransformer, TemporalTransforme
 from unifolm_wma.utils.utils import instantiate_from_config
 
 
+def _repeat_interleave_if_needed(x: Tensor, repeats: int, dim: int = 0) -> Tensor:
+    """Avoid materializing repeat_interleave buffers when repeats == 1."""
+    if repeats == 1:
+        return x
+    return x.repeat_interleave(repeats=repeats, dim=dim)
+
+
 class TimestepBlock(nn.Module):
     """
     Any module where forward() takes timestep embeddings as a second argument.
@@ -729,9 +736,11 @@ class WMAModel(nn.Module):
                 context_text = context[:, self.n_obs_steps:self.n_obs_steps +
                                        77, :]
                 context_img = context[:, self.n_obs_steps + 77:, :]
-                context_agent_state = context_agent_state.repeat_interleave(
-                    repeats=t, dim=0)
-                context_text = context_text.repeat_interleave(repeats=t, dim=0)
+                context_agent_state = _repeat_interleave_if_needed(
+                    context_agent_state, repeats=t, dim=0)
+                context_text = _repeat_interleave_if_needed(context_text,
+                                                            repeats=t,
+                                                            dim=0)
                 context_img = rearrange(context_img,
                                         'b (t l) c -> (b t) l c',
                                         t=t)
@@ -759,21 +768,23 @@ class WMAModel(nn.Module):
 
                 context_text = context[:, self.n_obs_steps +
                                        16:self.n_obs_steps + 16 + 77, :]
-                context_text = context_text.repeat_interleave(repeats=t, dim=0)
+                context_text = _repeat_interleave_if_needed(context_text,
+                                                            repeats=t,
+                                                            dim=0)
 
                 context_img = context[:, self.n_obs_steps + 16 + 77:, :]
                 context_img = rearrange(context_img,
                                         'b (t l) c -> (b t) l c',
                                         t=t)
-                context_agent_state = context_agent_state.repeat_interleave(
-                    repeats=t, dim=0)
+                context_agent_state = _repeat_interleave_if_needed(
+                    context_agent_state, repeats=t, dim=0)
                 context = torch.cat([
                     context_agent_state, context_agent_action, context_text,
                     context_img
                 ],
                                     dim=1)
 
-        emb = emb.repeat_interleave(repeats=t, dim=0)
+        emb = _repeat_interleave_if_needed(emb, repeats=t, dim=0)
 
         x = rearrange(x, 'b c t h w -> (b t) c h w')
 
@@ -788,7 +799,9 @@ class WMAModel(nn.Module):
                                         repeat_only=False).type(x.dtype)
 
             fs_embed = self.fps_embedding(fs_emb)
-            fs_embed = fs_embed.repeat_interleave(repeats=t, dim=0)
+            fs_embed = _repeat_interleave_if_needed(fs_embed,
+                                                    repeats=t,
+                                                    dim=0)
             emb = emb + fs_embed
 
         h = x.type(self.dtype)

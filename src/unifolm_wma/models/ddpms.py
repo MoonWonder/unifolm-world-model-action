@@ -459,14 +459,13 @@ class DDPM(pl.LightningModule):
         b = shape[0]
         img = torch.randn(shape, device=device)
         intermediates = [img]
+        ts = torch.empty((b, ), device=device, dtype=torch.long)
         for i in tqdm(reversed(range(0, self.num_timesteps)),
                       desc='Sampling t',
                       total=self.num_timesteps):
+            ts.fill_(i)
             img = self.p_sample(img,
-                                torch.full((b, ),
-                                           i,
-                                           device=device,
-                                           dtype=torch.long),
+                                ts,
                                 clip_denoised=self.clip_denoised)
             if i % self.log_every_t == 0 or i == self.num_timesteps - 1:
                 intermediates.append(img)
@@ -1704,8 +1703,10 @@ class LatentDiffusion(DDPM):
             assert x0 is not None
             assert x0.shape[2:3] == mask.shape[2:3]
 
+        ts = torch.empty((b, ), device=device, dtype=torch.long)
+
         for i in iterator:
-            ts = torch.full((b, ), i, device=device, dtype=torch.long)
+            ts.fill_(i)
             if self.shorten_cond_schedule:
                 assert self.model.conditioning_key != 'hybrid'
                 tc = self.cond_ids[ts].to(cond.device)
